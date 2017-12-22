@@ -1,0 +1,67 @@
+#!/bin/bash
+
+# Script to be used when creating new AWS EC2 instances running Ubuntu-16
+# The script has to be passed as 'User-Data' at creation time. It will
+# configure the machine as a mesos-agent connecting to the master running at
+# zk://130.192.157.180:2181/mesos
+# Once the instance is up and running, the mesos-agent will running as well, with
+# a basic, working configuration. Tens of options are available for mesos-agent,
+# but they must be set afterwards, according to the needs, as it is explained in
+# the preamble of '/usr/bin/mesos-init-wrapper' script.
+#
+# TODO: master ip address should not be hard-coded
+
+apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv E56151BF
+DISTRO=$(lsb_release -is | tr '[:upper:]' '[:lower:]')
+CODENAME=$(lsb_release -cs)
+echo "deb http://repos.mesosphere.com/${DISTRO} ${CODENAME} main" |    tee /etc/apt/sources.list.d/mesosphere.list
+
+add-apt-repository -y ppa:webupd8team/java
+apt update
+apt upgrade -y
+apt install -y python-software-properties python-pip
+pip install -U pip
+pip install pycrypto
+
+echo debconf shared/accepted-oracle-license-v1-1 select true |  debconf-set-selections
+echo debconf shared/accepted-oracle-license-v1-1 seen true |  debconf-set-selections
+apt install -y oracle-java8-installer
+echo 'JAVA_HOME="/usr/lib/jvm/java-8-oracle"' |  tee -a /etc/environment
+
+apt install -y git build-essential python-dev python-virtualenv libcurl4-nss-dev libsasl2-dev libsasl2-modules maven libapr1-dev libsvn-dev zlib1g-dev emacs24 libtool autoconf apt-transport-https ca-certificates curl software-properties-common
+apt install -y mesos
+
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg |  apt-key add -
+add-apt-repository "deb [arch=amd64] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable"
+apt update &&  apt install -y docker-ce
+usermod -aG docker $USER
+
+reboot -f
+
+echo 1 |  tee /etc/zookeeper/conf/myid
+echo 'server.1=130.192.157.180:2888:3888' |  tee -a zoo.cfg
+echo 'zk://130.192.157.180:2181/mesos' |  tee /etc/mesos/zk
+echo `hostname -i` |  tee /etc/mesos-slave/hostname
+echo `hostname -i` |  tee /etc/mesos-slave/ip
+wget -qO- http://instance-data/latest/meta-data/public-ipv4 |  tee /etc/mesos-slave/advertise_ip
+touch /etc/mesos-slave/?no-switch_user
+echo '/var/lib/mesos/' |  tee /etc/mesos-slave/work_dir
+mkdir -p /var/lib/mesos/
+chown -R $USER: /var/lib/mesos/
+
+systemctl disable zookeeper.service
+systemctl restart zookeeper.service
+systemctl stop mesos-master.service
+systemctl disable mesos-master.service
+systemctl start mesos-slave.service
+
+
+
+
+# The following is the command to actually install python eggs and wheels,
+# needed to develop a custom executor.
+# Basically, when compiling mesos source, it creates egg and whl files, which
+# can be installed using pip and the following command.
+#for whl in mesos-1.2.0-py2-none-any.whl mesos.cli-1.2.0-py2-none-any.whl mesos.executor-1.2.0-cp27-none-linux_x86_64.whl mesos.interface-1.2.0-py2-none-any.whl mesos.native-1.2.0-py2-none-any.whl mesos.scheduler-1.2.0-cp27-none-linux_x86_64.whl; do
+#pip install -I -f file:///space/Downloads/mesos-1.2.0/build/src/python/dist $whl
+#done
